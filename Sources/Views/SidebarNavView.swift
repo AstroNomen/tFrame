@@ -9,33 +9,32 @@ struct SidebarNavView: View {
             get: { appState.selectedTab },
             set: { if let val = $0 { appState.selectedTab = val } }
         )) {
-            Section {
-                ForEach(NavigationTab.allCases) { tab in
-                    HStack(spacing: 8) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: 18)
-                        
-                        Text(tab.title(for: appState.currentLanguage))
-                            .font(.subheadline)
-                        
-                        Spacer()
-                        
-                        if tab == .collage {
-                            Text(L10n.t(.comingSoon, lang: appState.currentLanguage))
-                                .font(.system(size: 9, weight: .medium))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(Color.orange.opacity(0.18))
-                                .foregroundColor(.orange)
-                                .clipShape(Capsule())
-                        }
+            ForEach(NavigationTab.allCases) { tab in
+                HStack(spacing: 8) {
+                    Image(systemName: tab.icon)
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 18)
+                    
+                    Text(tab.title(for: appState.currentLanguage))
+                        .font(.subheadline)
+                    
+                    Spacer()
+                    
+                    if tab == .collage {
+                        Text(L10n.t(.comingSoon, lang: appState.currentLanguage))
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.18))
+                            .foregroundColor(.orange)
+                            .clipShape(Capsule())
                     }
-                    .tag(tab)
                 }
+                .tag(tab)
             }
         }
         .listStyle(.sidebar)
+        .scrollDisabled(true)
         .safeAreaInset(edge: .bottom) {
             bottomStatusBar
         }

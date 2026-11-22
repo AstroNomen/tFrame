@@ -66,6 +66,11 @@ struct ContentView: View {
             return true
         }
         .frame(minWidth: 960, minHeight: 620)
+        .background(
+            WindowAccessor { window in
+                window.titlebarSeparatorStyle = .none
+            }
+        )
     }
     
     private func openImagePicker() {
@@ -1048,5 +1053,29 @@ struct SettingsInspector: View {
     
     private func hapticFeedback() {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+    }
+}
+
+// MARK: - Window Accessor for Native macOS Window Properties
+
+struct WindowAccessor: NSViewRepresentable {
+    var onResolve: (NSWindow) -> Void
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let window = view.window {
+                onResolve(window)
+            }
+        }
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if let window = nsView.window {
+                onResolve(window)
+            }
+        }
     }
 }
