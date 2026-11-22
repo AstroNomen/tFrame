@@ -62,12 +62,12 @@ final class ImageProcessor {
         context.draw(cgImage, in: photoRect)
         
         // Safe margin from the photo's edge
-        // Use frameTopBottom as a baseline for safe margin so it scales reasonably
-        let safeMargin = frameTopBottom * 0.4
+        // If has frame, scale with frame thickness; if 0 frame (borderless), use 3% of min dimension
+        let safeMargin = frameTopBottom > 0 ? max(frameTopBottom * 0.4, min(width, height) * 0.02) : (min(width, height) * 0.03)
         
-        // 1. Draw Frame Watermark
+        // 1. Draw Frame Watermark (only if frame exists)
         var frameWmRightX: CGFloat = 0
-        if let frameWmCG = loadFrameWatermark(processable: processable, state: state) {
+        if frameTopBottom > 0, let frameWmCG = loadFrameWatermark(processable: processable, state: state) {
             let wmAspect = CGFloat(frameWmCG.width) / CGFloat(frameWmCG.height)
             let scale = processable.customFrameWatermarkScale ?? state.frameWatermarkScale
             let targetHeight = frameTopBottom * 0.35 * scale // 35% of the frame thickness * scale
@@ -87,7 +87,7 @@ final class ImageProcessor {
             context.draw(frameWmCG, in: wmRect)
             context.restoreGState()
         } else {
-            // Default right boundary for alignment if no frame watermark
+            // Default right boundary for alignment if no frame or no frame watermark
             frameWmRightX = photoRect.maxX - safeMargin
         }
         
@@ -184,9 +184,53 @@ final class ImageProcessor {
     }
     
     private func loadCGImage(from url: URL) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let options = [kCGImageSourceShouldCache: true] as CFDictionary
-        return CGImageSourceCreateImageAtIndex(source, 0, options)
+        let pathExt = url.pathExtension.lowercased()
+        
+        // 1. Direct raster image formats via CGImageSource (PNG, JPG, WebP, TIFF, HEIC, etc.)
+        if ["png", "jpg", "jpeg", "webp", "tiff", "tif", "heic", "bmp"].contains(pathExt) {
+            if let source = CGImageSourceCreateWithURL(url as CFURL, nil) {
+                let options = [kCGImageSourceShouldCache: true] as CFDictionary
+                if let cg = CGImageSourceCreateImageAtIndex(source, 0, options) {
+                    return cg
+                }
+            }
+        }
+        
+        // 2. Vector formats (SVG, PDF) or other formats rendered via NSImage at high fidelity
+        if let nsImage = NSImage(contentsOf: url) {
+            let naturalSize = nsImage.size
+            guard naturalSize.width > 0, naturalSize.height > 0 else { return nil }
+            
+            // Render vector assets at crisp high resolution (at least 2400px wide/high)
+            let maxDimension: CGFloat = max(naturalSize.width, naturalSize.height)
+            let renderScale: CGFloat = maxDimension < 2400 ? (2400 / maxDimension) : 1.0
+            let renderWidth = max(Int(naturalSize.width * renderScale), 100)
+            let renderHeight = max(Int(naturalSize.height * renderScale), 100)
+            
+            let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+            let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+            
+            if let context = CGContext(data: nil,
+                                       width: renderWidth,
+                                       height: renderHeight,
+                                       bitsPerComponent: 8,
+                                       bytesPerRow: 0,
+                                       space: colorSpace,
+                                       bitmapInfo: bitmapInfo) {
+                let nsContext = NSGraphicsContext(cgContext: context, flipped: false)
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = nsContext
+                
+                nsImage.draw(in: CGRect(x: 0, y: 0, width: renderWidth, height: renderHeight),
+                             from: .zero,
+                             operation: .copy,
+                             fraction: 1.0)
+                
+                NSGraphicsContext.restoreGraphicsState()
+                return context.makeImage()
+            }
+        }
+        return nil
     }
     
     private func loadCGImage(named name: String) -> CGImage? {
