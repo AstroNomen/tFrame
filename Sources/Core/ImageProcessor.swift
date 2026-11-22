@@ -1,5 +1,7 @@
 import Cocoa
 import CoreGraphics
+import ImageIO
+import CoreImage
 
 @MainActor
 final class ImageProcessor {
@@ -12,15 +14,22 @@ final class ImageProcessor {
     private let defaultInPhotoWmWhite = "TimeSlice_W"
     
     func process(image processable: ProcessedImage, state: AppState) async -> NSImage? {
-        guard let cgImage = processable.originalImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        guard let finalCGImage = await processCGImage(image: processable, state: state) else {
+            return nil
+        }
+        return NSImage(cgImage: finalCGImage, size: NSSize(width: finalCGImage.width, height: finalCGImage.height))
+    }
+    
+    func processCGImage(image processable: ProcessedImage, state: AppState) async -> CGImage? {
+        guard let cgImage = loadOriginalCGImage(processable: processable) else {
             return nil
         }
         
         let width = CGFloat(cgImage.width)
         let height = CGFloat(cgImage.height)
         
-        // Calculate frame width based on user percentage
-        let frameThickness = (width + height) * CGFloat(state.frameWidthPercentage / 100.0)
+        // Calculate frame width based on user percentage, rounded to integer pixels to avoid subpixel blur
+        let frameThickness = round((width + height) * CGFloat(state.frameWidthPercentage / 100.0))
         let style = processable.customFrameStyle ?? state.defaultFrameStyle
         
         let frameLeftRight = style == .cinematic ? 0.0 : frameThickness
@@ -29,7 +38,7 @@ final class ImageProcessor {
         let totalWidth = width + frameLeftRight * 2
         let totalHeight = height + frameTopBottom * 2
         
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let colorSpace = cgImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
         
         guard let context = CGContext(data: nil,
@@ -48,7 +57,7 @@ final class ImageProcessor {
         context.setFillColor(frameColor)
         context.fill(CGRect(x: 0, y: 0, width: totalWidth, height: totalHeight))
         
-        // Draw original photo
+        // Draw original photo at 1:1 pixel exact bounds
         let photoRect = CGRect(x: frameLeftRight, y: frameTopBottom, width: width, height: height)
         context.draw(cgImage, in: photoRect)
         
@@ -73,8 +82,10 @@ final class ImageProcessor {
             
             let wmRect = CGRect(x: xPos, y: yPos, width: targetWidth, height: targetHeight)
             
+            context.saveGState()
             context.setAlpha(CGFloat(state.frameWatermarkOpacity))
             context.draw(frameWmCG, in: wmRect)
+            context.restoreGState()
         } else {
             // Default right boundary for alignment if no frame watermark
             frameWmRightX = photoRect.maxX - safeMargin
@@ -106,12 +117,42 @@ final class ImageProcessor {
             let wmRect = CGRect(x: xPos, y: yPos, width: targetWidth, height: targetHeight)
             
             let opacity = processable.customInPhotoWatermarkOpacity ?? state.inPhotoWatermarkOpacity
+            context.saveGState()
             context.setAlpha(CGFloat(opacity))
             context.draw(inPhotoWmCG, in: wmRect)
+            context.restoreGState()
         }
         
-        guard let finalCGImage = context.makeImage() else { return nil }
-        return NSImage(cgImage: finalCGImage, size: NSSize(width: totalWidth, height: totalHeight))
+        return context.makeImage()
+    }
+    
+    private func loadOriginalCGImage(processable: ProcessedImage) -> CGImage? {
+        let options = [kCGImageSourceShouldCache: true] as CFDictionary
+        if let source = CGImageSourceCreateWithURL(processable.originalURL as CFURL, nil),
+           let cgImage = CGImageSourceCreateImageAtIndex(source, 0, options) {
+            
+            // Check orientation from metadata and apply if needed
+            if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+               let orientationNum = properties[kCGImagePropertyOrientation] as? UInt32,
+               let orientation = CGImagePropertyOrientation(rawValue: orientationNum),
+               orientation != .up {
+                let ciImage = CIImage(cgImage: cgImage).oriented(orientation)
+                let ciContext = CIContext()
+                if let orientedCG = ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                    return orientedCG
+                }
+            }
+            return cgImage
+        }
+        
+        // Fallback to processable.originalImage
+        if let rep = processable.originalImage.representations.first(where: { $0 is NSBitmapImageRep }) as? NSBitmapImageRep,
+           let cg = rep.cgImage {
+            return cg
+        }
+        
+        var rect = CGRect(origin: .zero, size: processable.originalImage.size)
+        return processable.originalImage.cgImage(forProposedRect: &rect, context: nil, hints: nil)
     }
     
     private func loadFrameWatermark(processable: ProcessedImage, state: AppState) -> CGImage? {
@@ -120,15 +161,12 @@ final class ImageProcessor {
         let wmTheme = processable.customFrameWatermarkTheme ?? defaultWmTheme
         
         let customURL = wmTheme == .light ? state.customFrameLightURL : state.customFrameDarkURL
-        if let url = customURL, let img = NSImage(contentsOf: url) {
-            return img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        if let url = customURL {
+            return loadCGImage(from: url)
         }
         
         let name = wmTheme == .light ? defaultFrameWmWhite : defaultFrameWmBlack
-        if let img = NSImage(named: name) ?? NSImage(contentsOfFile: Bundle.main.path(forResource: name, ofType: "png") ?? "") {
-            return img.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        }
-        return nil
+        return loadCGImage(named: name)
     }
     
     private func loadInPhotoWatermark(processable: ProcessedImage, state: AppState) -> CGImage? {
@@ -137,13 +175,31 @@ final class ImageProcessor {
         let wmTheme = processable.customInPhotoWatermarkTheme ?? defaultWmTheme
         
         let customURL = wmTheme == .light ? state.customInPhotoLightURL : state.customInPhotoDarkURL
-        if let url = customURL, let img = NSImage(contentsOf: url) {
-            return img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        if let url = customURL {
+            return loadCGImage(from: url)
         }
         
         let name = wmTheme == .light ? defaultInPhotoWmWhite : defaultInPhotoWmBlack
-        if let img = NSImage(named: name) ?? NSImage(contentsOfFile: Bundle.main.path(forResource: name, ofType: "png") ?? "") {
-            return img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        return loadCGImage(named: name)
+    }
+    
+    private func loadCGImage(from url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options = [kCGImageSourceShouldCache: true] as CFDictionary
+        return CGImageSourceCreateImageAtIndex(source, 0, options)
+    }
+    
+    private func loadCGImage(named name: String) -> CGImage? {
+        if let path = Bundle.main.path(forResource: name, ofType: "png") {
+            return loadCGImage(from: URL(fileURLWithPath: path))
+        }
+        if let img = NSImage(named: name) {
+            if let rep = img.representations.first(where: { $0 is NSBitmapImageRep }) as? NSBitmapImageRep,
+               let cg = rep.cgImage {
+                return cg
+            }
+            var rect = CGRect(origin: .zero, size: img.size)
+            return img.cgImage(forProposedRect: &rect, context: nil, hints: nil)
         }
         return nil
     }

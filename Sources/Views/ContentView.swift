@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import ImageIO
 
 struct ContentView: View {
     @StateObject private var appState = AppState()
@@ -64,8 +65,8 @@ struct ContentView: View {
                 // Yield to allow panel to dismiss
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 
-                if let finalImage = await ImageProcessor.shared.process(image: processable, state: appState) {
-                    save(image: finalImage, to: url)
+                if let cgImage = await ImageProcessor.shared.processCGImage(image: processable, state: appState) {
+                    save(cgImage: cgImage, sourceURL: processable.originalURL, to: url)
                 }
             }
         }
@@ -88,25 +89,42 @@ struct ContentView: View {
                 
                 for processable in appState.images {
                     await Task.yield() // Keep UI responsive during batch export
-                    guard let finalImage = await ImageProcessor.shared.process(image: processable, state: appState) else { continue }
+                    guard let cgImage = await ImageProcessor.shared.processCGImage(image: processable, state: appState) else { continue }
                     
                     let originalName = processable.originalURL.deletingPathExtension().lastPathComponent
                     let fileURL = folderURL.appendingPathComponent("\(originalName)_tFrame.jpg")
-                    save(image: finalImage, to: fileURL)
+                    save(cgImage: cgImage, sourceURL: processable.originalURL, to: fileURL)
                 }
             }
         }
     }
     
-    private func save(image: NSImage, to url: URL) {
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
-        let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
+    private func save(cgImage: CGImage, sourceURL: URL?, to url: URL) {
+        let isPNG = url.pathExtension.lowercased() == "png"
+        let utType = isPNG ? UTType.png.identifier as CFString : UTType.jpeg.identifier as CFString
         
-        let type: NSBitmapImageRep.FileType = url.pathExtension.lowercased() == "png" ? .png : .jpeg
-        let properties: [NSBitmapImageRep.PropertyKey: Any] = type == .jpeg ? [.compressionFactor: 0.9] : [:]
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, utType, 1, nil) else { return }
         
-        guard let data = bitmapRep.representation(using: type, properties: properties) else { return }
-        try? data.write(to: url)
+        var metadata: [CFString: Any] = [:]
+        
+        // Preserve EXIF and other metadata from original file if available
+        if let sourceURL = sourceURL, let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil) {
+            if let sourceProperties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
+                metadata = sourceProperties
+            }
+        }
+        
+        // Ensure accurate pixel dimensions and orientation in metadata
+        metadata[kCGImagePropertyPixelWidth] = cgImage.width
+        metadata[kCGImagePropertyPixelHeight] = cgImage.height
+        metadata[kCGImagePropertyOrientation] = 1
+        
+        if !isPNG {
+            metadata[kCGImageDestinationLossyCompressionQuality] = 0.92
+        }
+        
+        CGImageDestinationAddImage(destination, cgImage, metadata as CFDictionary)
+        CGImageDestinationFinalize(destination)
     }
 }
 
