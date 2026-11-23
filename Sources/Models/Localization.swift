@@ -140,7 +140,18 @@ struct L10n {
         case defaultStyle
         case fullFrame
         case cinematic
+        case cinematicRatio
+        case cinematicRatioFree
+        case adaptiveRatio
+        case polaroid
+        case bottomLabel
+        case sideLabelLeft
+        case sideLabelRight
+        case stamp
+        case filmSprockets
+        case squareFrame
         case frameWidth
+        case fixedWidth
         case exportQualitySection
         case exportQualityLabel
         case useGlobalDefault
@@ -225,7 +236,18 @@ struct L10n {
             case .defaultStyle: return "边框版式"
             case .fullFrame: return "全包边框 (Full)"
             case .cinematic: return "宽银幕上下边 (Cinematic)"
+            case .cinematicRatio: return "目标画幅"
+            case .cinematicRatioFree: return "自由宽度 (滑块调节)"
+            case .adaptiveRatio: return "自适应比例 (不可调)"
+            case .polaroid: return "拍立得 (Polaroid)"
+            case .bottomLabel: return "底部标签 (Bottom Label)"
+            case .sideLabelLeft: return "侧边标签 - 居左 (Side Left)"
+            case .sideLabelRight: return "侧边标签 - 居右 (Side Right)"
+            case .stamp: return "邮票锯齿边 (Stamp)"
+            case .filmSprockets: return "胶片齿孔 (Film)"
+            case .squareFrame: return "正方形画框 (Square 1:1)"
             case .frameWidth: return "边框宽度"
+            case .fixedWidth: return "固定比例 (不可调)"
             case .exportQualitySection: return "导出画质"
             case .exportQualityLabel: return "压缩档位"
             case .useGlobalDefault: return "跟随全局设置"
@@ -308,7 +330,18 @@ struct L10n {
             case .defaultStyle: return "Border Style"
             case .fullFrame: return "Full Frame"
             case .cinematic: return "Cinematic (Top/Bottom)"
+            case .cinematicRatio: return "Canvas Ratio"
+            case .cinematicRatioFree: return "Free (Slider)"
+            case .adaptiveRatio: return "Adaptive (Fixed)"
+            case .polaroid: return "Polaroid"
+            case .bottomLabel: return "Bottom Label"
+            case .sideLabelLeft: return "Side Label (Left)"
+            case .sideLabelRight: return "Side Label (Right)"
+            case .stamp: return "Stamp"
+            case .filmSprockets: return "Film Sprockets"
+            case .squareFrame: return "Square (1:1)"
             case .frameWidth: return "Frame Width"
+            case .fixedWidth: return "Fixed (Non-adjustable)"
             case .exportQualitySection: return "Export Quality"
             case .exportQualityLabel: return "Quality Preset"
             case .useGlobalDefault: return "Use Global Default"

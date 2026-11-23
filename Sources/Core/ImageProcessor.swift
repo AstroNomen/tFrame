@@ -28,15 +28,17 @@ final class ImageProcessor {
         let width = CGFloat(cgImage.width)
         let height = CGFloat(cgImage.height)
         
-        // Calculate frame width based on user percentage, rounded to integer pixels to avoid subpixel blur
-        let frameThickness = round((width + height) * CGFloat(state.frameWidthPercentage / 100.0))
         let style = processable.customFrameStyle ?? state.defaultFrameStyle
+        let cinematicRatio = processable.customCinematicRatio ?? state.defaultCinematicRatio
+        let insets = style.insets(width: Double(width), height: Double(height), percentage: state.frameWidthPercentage, cinematicRatio: cinematicRatio)
         
-        let frameLeftRight = style == .cinematic ? 0.0 : frameThickness
-        let frameTopBottom = frameThickness
+        let frameLeft = CGFloat(insets.left)
+        let frameRight = CGFloat(insets.right)
+        let frameTop = CGFloat(insets.top)
+        let frameBottom = CGFloat(insets.bottom)
         
-        let totalWidth = width + frameLeftRight * 2
-        let totalHeight = height + frameTopBottom * 2
+        let totalWidth = width + frameLeft + frameRight
+        let totalHeight = height + frameTop + frameBottom
         
         let colorSpace = cgImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
@@ -53,39 +55,84 @@ final class ImageProcessor {
         
         // Draw background (frame)
         let theme = processable.customThemeColor ?? state.themeColor
-        let frameColor = theme == .black ? NSColor.black.cgColor : NSColor.white.cgColor
+        let frameColor: CGColor
+        if style == .film {
+            frameColor = NSColor.black.cgColor
+        } else {
+            frameColor = theme == .black ? NSColor.black.cgColor : NSColor.white.cgColor
+        }
         context.setFillColor(frameColor)
         context.fill(CGRect(x: 0, y: 0, width: totalWidth, height: totalHeight))
         
         // Draw original photo at 1:1 pixel exact bounds
-        let photoRect = CGRect(x: frameLeftRight, y: frameTopBottom, width: width, height: height)
+        let photoRect = CGRect(x: frameLeft, y: frameBottom, width: width, height: height)
         context.draw(cgImage, in: photoRect)
         
-        // Safe margin from the photo's edge
-        // If has frame, scale with frame thickness; if 0 frame (borderless), use 3% of min dimension
-        let safeMargin = frameTopBottom > 0 ? max(frameTopBottom * 0.4, min(width, height) * 0.02) : (min(width, height) * 0.03)
+        // Draw style-specific features (Stamp perforations or Film sprockets)
+        if style == .stamp {
+            drawStampPerforations(context: context, totalWidth: totalWidth, totalHeight: totalHeight, border: frameLeft)
+        } else if style == .film {
+            drawFilmSprockets(context: context, totalWidth: totalWidth, totalHeight: totalHeight, frameLeft: frameLeft, frameRight: frameRight, frameTop: frameTop, frameBottom: frameBottom)
+        }
         
-        // 1. Draw Frame Watermark (only if frame exists)
+        // Safe margin from the photo's edge
+        // If has bottom frame, scale with frame thickness; if 0 frame (borderless), use 3% of min dimension
+        let safeMargin: CGFloat
+        if style == .polaroid {
+            safeMargin = max(frameLeft * 0.6, min(width, height) * 0.025)
+        } else if style == .square {
+            safeMargin = max(frameBottom * 0.25, min(width, height) * 0.03)
+        } else if style == .sideLabelLeft || style == .sideLabelRight {
+            safeMargin = min(width, height) * 0.03
+        } else if frameBottom > 0 {
+            safeMargin = max(frameBottom * 0.35, min(width, height) * 0.02)
+        } else {
+            safeMargin = min(width, height) * 0.03
+        }
+        
+        // 1. Draw Frame Watermark
         var frameWmRightX: CGFloat = 0
-        if frameTopBottom > 0, let frameWmCG = loadFrameWatermark(processable: processable, state: state) {
+        if let frameWmCG = loadFrameWatermark(processable: processable, state: state) {
             let wmAspect = CGFloat(frameWmCG.width) / CGFloat(frameWmCG.height)
             let scale = processable.customFrameWatermarkScale ?? state.frameWatermarkScale
-            let targetHeight = frameTopBottom * 0.35 * scale // 35% of the frame thickness * scale
-            let targetWidth = targetHeight * wmAspect
             
-            // Centered vertically in the bottom border
-            let yPos = (frameTopBottom - targetHeight) / 2.0
-            
-            // Placed on the right, with a safe margin from the photo's right edge
-            let xPos = photoRect.maxX - safeMargin - targetWidth
-            frameWmRightX = xPos + targetWidth
-            
-            let wmRect = CGRect(x: xPos, y: yPos, width: targetWidth, height: targetHeight)
-            
-            context.saveGState()
-            context.setAlpha(CGFloat(state.frameWatermarkOpacity))
-            context.draw(frameWmCG, in: wmRect)
-            context.restoreGState()
+            if style == .sideLabelLeft || style == .sideLabelRight {
+                // 侧边栏：竖向旋转 90° 居中在侧栏
+                let sideWidth = style == .sideLabelLeft ? frameLeft : frameRight
+                let targetHeight = sideWidth * 0.35 * scale
+                let targetWidth = targetHeight * wmAspect
+                let centerX = style == .sideLabelLeft ? (frameLeft / 2.0) : (photoRect.maxX + frameRight / 2.0)
+                let centerY = totalHeight / 2.0
+                
+                context.saveGState()
+                context.setAlpha(CGFloat(state.frameWatermarkOpacity))
+                context.translateBy(x: centerX, y: centerY)
+                context.rotate(by: CGFloat.pi / 2.0)
+                context.draw(frameWmCG, in: CGRect(x: -targetWidth / 2.0, y: -targetHeight / 2.0, width: targetWidth, height: targetHeight))
+                context.restoreGState()
+                
+                frameWmRightX = photoRect.maxX - safeMargin
+            } else if frameBottom > 0 && style != .film {
+                let baseHeight = (style == .square || style == .cinematic) ? min(frameBottom * 0.35, min(width, height) * 0.045) : (frameBottom * 0.35)
+                let targetHeight = baseHeight * scale
+                let targetWidth = targetHeight * wmAspect
+                
+                // Centered vertically in the bottom border
+                let yPos = (frameBottom - targetHeight) / 2.0
+                
+                // Placed on the right, with a safe margin from the photo's right edge
+                let xPos = photoRect.maxX - safeMargin - targetWidth
+                frameWmRightX = xPos + targetWidth
+                
+                let wmRect = CGRect(x: xPos, y: yPos, width: targetWidth, height: targetHeight)
+                
+                context.saveGState()
+                context.setAlpha(CGFloat(state.frameWatermarkOpacity))
+                context.draw(frameWmCG, in: wmRect)
+                context.restoreGState()
+            } else {
+                frameWmRightX = photoRect.maxX - safeMargin
+            }
         } else {
             // Default right boundary for alignment if no frame or no frame watermark
             frameWmRightX = photoRect.maxX - safeMargin
@@ -156,8 +203,9 @@ final class ImageProcessor {
     }
     
     private func loadFrameWatermark(processable: ProcessedImage, state: AppState) -> CGImage? {
+        let style = processable.customFrameStyle ?? state.defaultFrameStyle
         let baseTheme = processable.customThemeColor ?? state.themeColor
-        let defaultWmTheme: WatermarkTheme = baseTheme == .black ? .light : .dark
+        let defaultWmTheme: WatermarkTheme = (style == .film) ? .light : (baseTheme == .black ? .light : .dark)
         let wmTheme = processable.customFrameWatermarkTheme ?? defaultWmTheme
         
         let customURL = wmTheme == .light ? state.customFrameLightURL : state.customFrameDarkURL
@@ -246,5 +294,129 @@ final class ImageProcessor {
             return img.cgImage(forProposedRect: &rect, context: nil, hints: nil)
         }
         return nil
+    }
+    
+    // MARK: - Specialized Frame Drawing
+    
+    private func drawFilmSprockets(context: CGContext, totalWidth: CGFloat, totalHeight: CGFloat, frameLeft: CGFloat, frameRight: CGFloat, frameTop: CGFloat, frameBottom: CGFloat) {
+        context.saveGState()
+        
+        if frameTop > 0 && frameBottom > 0 {
+            // 横向胶卷：齿孔在【上下两排】横向排列
+            let holeHeight = round(frameBottom * 0.48)
+            let holeWidth = round(holeHeight * (1.98 / 2.79))
+            let holePitch = round(holeHeight * (4.75 / 2.79))
+            let cornerRadius = round(holeWidth * 0.22)
+            
+            let totalHoles = Int(ceil(totalWidth / holePitch)) + 2
+            let totalSpan = CGFloat(totalHoles - 1) * holePitch + holeWidth
+            let startX = (totalWidth - totalSpan) / 2.0
+            
+            let bottomY = (frameBottom - holeHeight) / 2.0
+            let topY = totalHeight - frameTop + (frameTop - holeHeight) / 2.0
+            
+            for i in 0..<totalHoles {
+                let x = startX + CGFloat(i) * holePitch
+                let bottomHoleRect = CGRect(x: x, y: bottomY, width: holeWidth, height: holeHeight)
+                let topHoleRect = CGRect(x: x, y: topY, width: holeWidth, height: holeHeight)
+                
+                // 下排齿孔
+                let bottomPath = CGPath(roundedRect: bottomHoleRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+                context.setBlendMode(.clear)
+                context.addPath(bottomPath)
+                context.fillPath()
+                
+                context.setBlendMode(.normal)
+                context.setStrokeColor(NSColor(white: 0.28, alpha: 0.8).cgColor)
+                context.setLineWidth(1.0)
+                context.addPath(bottomPath)
+                context.strokePath()
+                
+                // 上排齿孔
+                let topPath = CGPath(roundedRect: topHoleRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+                context.setBlendMode(.clear)
+                context.addPath(topPath)
+                context.fillPath()
+                
+                context.setBlendMode(.normal)
+                context.setStrokeColor(NSColor(white: 0.28, alpha: 0.8).cgColor)
+                context.setLineWidth(1.0)
+                context.addPath(topPath)
+                context.strokePath()
+            }
+        } else if frameLeft > 0 && frameRight > 0 {
+            // 竖向胶卷（相机旋转90°竖构图）：齿孔在【左右两排】纵向排列
+            let holeWidth = round(frameLeft * 0.48)
+            let holeHeight = round(holeWidth * (2.79 / 1.98))
+            let holePitch = round(holeWidth * (4.75 / 1.98))
+            let cornerRadius = round(holeWidth * 0.22)
+            
+            let totalHoles = Int(ceil(totalHeight / holePitch)) + 2
+            let totalSpan = CGFloat(totalHoles - 1) * holePitch + holeHeight
+            let startY = (totalHeight - totalSpan) / 2.0
+            
+            let leftX = (frameLeft - holeWidth) / 2.0
+            let rightX = totalWidth - frameRight + (frameRight - holeWidth) / 2.0
+            
+            for i in 0..<totalHoles {
+                let y = startY + CGFloat(i) * holePitch
+                let leftHoleRect = CGRect(x: leftX, y: y, width: holeWidth, height: holeHeight)
+                let rightHoleRect = CGRect(x: rightX, y: y, width: holeWidth, height: holeHeight)
+                
+                // 左排齿孔
+                let leftPath = CGPath(roundedRect: leftHoleRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+                context.setBlendMode(.clear)
+                context.addPath(leftPath)
+                context.fillPath()
+                
+                context.setBlendMode(.normal)
+                context.setStrokeColor(NSColor(white: 0.28, alpha: 0.8).cgColor)
+                context.setLineWidth(1.0)
+                context.addPath(leftPath)
+                context.strokePath()
+                
+                // 右排齿孔
+                let rightPath = CGPath(roundedRect: rightHoleRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+                context.setBlendMode(.clear)
+                context.addPath(rightPath)
+                context.fillPath()
+                
+                context.setBlendMode(.normal)
+                context.setStrokeColor(NSColor(white: 0.28, alpha: 0.8).cgColor)
+                context.setLineWidth(1.0)
+                context.addPath(rightPath)
+                context.strokePath()
+            }
+        }
+        
+        context.restoreGState()
+    }
+    
+    private func drawStampPerforations(context: CGContext, totalWidth: CGFloat, totalHeight: CGFloat, border: CGFloat) {
+        let radius = max(round(border * 0.28), 8.0)
+        let pitch = radius * 2.6
+        
+        context.saveGState()
+        context.setBlendMode(.clear)
+        
+        // 顶部与底部边缘打孔
+        let countX = max(Int(round(totalWidth / pitch)), 2)
+        let stepX = totalWidth / CGFloat(countX)
+        for i in 0...countX {
+            let cx = CGFloat(i) * stepX
+            context.fillEllipse(in: CGRect(x: cx - radius, y: -radius, width: radius * 2, height: radius * 2))
+            context.fillEllipse(in: CGRect(x: cx - radius, y: totalHeight - radius, width: radius * 2, height: radius * 2))
+        }
+        
+        // 左侧与右侧边缘打孔
+        let countY = max(Int(round(totalHeight / pitch)), 2)
+        let stepY = totalHeight / CGFloat(countY)
+        for i in 0...countY {
+            let cy = CGFloat(i) * stepY
+            context.fillEllipse(in: CGRect(x: -radius, y: cy - radius, width: radius * 2, height: radius * 2))
+            context.fillEllipse(in: CGRect(x: totalWidth - radius, y: cy - radius, width: radius * 2, height: radius * 2))
+        }
+        
+        context.restoreGState()
     }
 }

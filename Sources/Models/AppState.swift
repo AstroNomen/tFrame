@@ -69,16 +69,143 @@ enum ThemeColor: String, CaseIterable, Identifiable {
     }
 }
 
-enum FrameStyle: String, CaseIterable, Identifiable {
-    case full = "Full Frame"
-    case cinematic = "Cinematic (Top/Bottom)"
+enum CinematicAspectRatio: String, CaseIterable, Identifiable {
+    case free = "Free (Slider)"
+    case r16_9 = "16:9"
+    case r19_5_9 = "19.5:9"
+    case r21_9 = "21:9"
     
     var id: String { self.rawValue }
     
     func title(for lang: AppLanguage) -> String {
         switch self {
+        case .free: return L10n.t(.cinematicRatioFree, lang: lang)
+        case .r16_9: return "16:9 (电脑/显示器)"
+        case .r19_5_9: return "19.5:9 (iPhone全屏)"
+        case .r21_9: return "21:9 (带鱼屏/电影)"
+        }
+    }
+    
+    var ratioValue: Double? {
+        switch self {
+        case .free: return nil
+        case .r16_9: return 16.0 / 9.0
+        case .r19_5_9: return 19.5 / 9.0
+        case .r21_9: return 21.0 / 9.0
+        }
+    }
+}
+
+enum FrameStyle: String, CaseIterable, Identifiable {
+    case full = "Full Frame"
+    case cinematic = "Cinematic (Top/Bottom)"
+    case polaroid = "Polaroid"
+    case label = "Bottom Label"
+    case sideLabelLeft = "Side Label (Left)"
+    case sideLabelRight = "Side Label (Right)"
+    case stamp = "Stamp"
+    case film = "Film Sprockets"
+    case square = "Square (1:1)"
+    
+    var id: String { self.rawValue }
+    
+    var isFixedThickness: Bool {
+        switch self {
+        case .polaroid, .label, .sideLabelLeft, .sideLabelRight, .stamp, .film, .square:
+            return true
+        case .full, .cinematic:
+            return false
+        }
+    }
+    
+    func title(for lang: AppLanguage) -> String {
+        switch self {
         case .full: return L10n.t(.fullFrame, lang: lang)
         case .cinematic: return L10n.t(.cinematic, lang: lang)
+        case .polaroid: return L10n.t(.polaroid, lang: lang)
+        case .label: return L10n.t(.bottomLabel, lang: lang)
+        case .sideLabelLeft: return L10n.t(.sideLabelLeft, lang: lang)
+        case .sideLabelRight: return L10n.t(.sideLabelRight, lang: lang)
+        case .stamp: return L10n.t(.stamp, lang: lang)
+        case .film: return L10n.t(.filmSprockets, lang: lang)
+        case .square: return L10n.t(.squareFrame, lang: lang)
+        }
+    }
+    
+    func insets(width: Double, height: Double, percentage: Double, cinematicRatio: CinematicAspectRatio = .free) -> (left: Double, right: Double, top: Double, bottom: Double) {
+        let frameThickness = round((width + height) * (percentage / 100.0))
+        let minDim = min(width, height)
+        let maxDim = max(width, height)
+        
+        switch self {
+        case .full:
+            return (frameThickness, frameThickness, frameThickness, frameThickness)
+        case .cinematic:
+            if let targetRatio = cinematicRatio.ratioValue {
+                let isLandscape = width >= height
+                // 当前图片的长宽比
+                let currentRatio = isLandscape ? (width / height) : (height / width)
+                
+                if currentRatio >= targetRatio {
+                    // 原图比目标画幅更宽（如 XPAN 65:24 放入 16:9/21:9 容器）：上下填充黑边 (Letterbox)
+                    let targetH = isLandscape ? round(width / targetRatio) : round(width * targetRatio)
+                    let padH = max(0.0, targetH - height)
+                    let top = round(padH / 2.0)
+                    let bottom = padH - top
+                    return (0.0, 0.0, top, bottom)
+                } else {
+                    // 原图比目标画幅更窄：左右填充黑边 (Pillarbox)
+                    let targetW = isLandscape ? round(height * targetRatio) : round(height / targetRatio)
+                    let padW = max(0.0, targetW - width)
+                    let left = round(padW / 2.0)
+                    let right = padW - left
+                    return (left, right, 0.0, 0.0)
+                }
+            } else {
+                return (0.0, 0.0, frameThickness, frameThickness)
+            }
+        case .polaroid:
+            // 拍立得经典相纸比例：左、右、上等宽窄白边，底边为较宽边框（约3.5倍侧边）
+            let side = round(minDim * 0.045)
+            let bottom = round(minDim * 0.16)
+            return (side, side, side, bottom)
+        case .label:
+            // 底部标签样式：类似手机相机水印边框，左右上无边，底边一条利落边框
+            let bottom = round(minDim * 0.09)
+            return (0.0, 0.0, 0.0, bottom)
+        case .sideLabelLeft:
+            // 侧边标签(居左)：左侧约 9% 宽度画册侧边栏，上右下无边
+            let side = round(minDim * 0.09)
+            return (side, 0.0, 0.0, 0.0)
+        case .sideLabelRight:
+            // 侧边标签(居右)：右侧约 9% 宽度画册侧边栏，上左下无边
+            let side = round(minDim * 0.09)
+            return (0.0, side, 0.0, 0.0)
+        case .stamp:
+            // 邮票锯齿边：四周留出约 5.5% 的规整邮票边框，外缘带物理打孔圆孔锯齿
+            let border = round(minDim * 0.055)
+            return (border, border, border, border)
+        case .film:
+            // 135胶片片基：依据真实底片物理规律自动适配方向
+            // - 横拍（width >= height）：胶片水平走卷，齿孔位于画面的【上下两侧】
+            // - 竖拍（height > width）：相机旋转90°竖构图，胶片垂直走卷，齿孔位于画面的【左右两侧】
+            if width >= height {
+                let rebate = round(height * 0.23)
+                return (0.0, 0.0, rebate, rebate)
+            } else {
+                let rebate = round(width * 0.23)
+                return (rebate, rebate, 0.0, 0.0)
+            }
+        case .square:
+            // 正方形画框：自适应填充成 1:1，长边两侧保留约 4% 的装裱留白，照片绝对居中
+            let targetSide = round(maxDim * 1.08)
+            let padW = max(0.0, targetSide - width)
+            let padH = max(0.0, targetSide - height)
+            let left = round(padW / 2.0)
+            let right = padW - left
+            let bottom = round(padH / 2.0)
+            let top = padH - bottom
+            return (left, right, top, bottom)
         }
     }
 }
@@ -117,11 +244,13 @@ struct ProcessedImage: Identifiable {
     var customInPhotoWatermarkScale: Double?
     var customInPhotoWatermarkOpacity: Double?
     var customFrameWatermarkScale: Double?
+    var customCinematicRatio: CinematicAspectRatio?
     var customExportQuality: ExportQuality?
     
     var hasCustomOverrides: Bool {
         customWatermarkPosition != nil ||
         customFrameStyle != nil ||
+        customCinematicRatio != nil ||
         customThemeColor != nil ||
         customInPhotoWatermarkTheme != nil ||
         customFrameWatermarkTheme != nil ||
@@ -161,6 +290,7 @@ class AppState: ObservableObject {
     
     @Published var frameWidthPercentage: Double = 1.2 { didSet { bumpPreview() } }
     @Published var defaultFrameStyle: FrameStyle = .full { didSet { bumpPreview() } }
+    @Published var defaultCinematicRatio: CinematicAspectRatio = .free { didSet { bumpPreview() } }
     @Published var defaultWatermarkPosition: WatermarkPosition = .bottomRight { didSet { bumpPreview() } }
     @Published var themeColor: ThemeColor = .black { didSet { bumpPreview() } }
     @Published var inPhotoWatermarkOpacity: Double = 0.8 { didSet { bumpPreview() } }
@@ -211,6 +341,7 @@ class AppState: ObservableObject {
         guard let idx = selectedImageIndex, idx < images.count else { return }
         images[idx].customWatermarkPosition = nil
         images[idx].customFrameStyle = nil
+        images[idx].customCinematicRatio = nil
         images[idx].customThemeColor = nil
         images[idx].customInPhotoWatermarkTheme = nil
         images[idx].customFrameWatermarkTheme = nil
@@ -313,14 +444,12 @@ class AppState: ObservableObject {
         let h = Double(image.pixelHeight)
         guard w > 0, h > 0 else { return (image.pixelWidth, image.pixelHeight) }
         
-        let frameThickness = round((w + h) * (frameWidthPercentage / 100.0))
         let style = image.customFrameStyle ?? defaultFrameStyle
+        let cinematicRatio = image.customCinematicRatio ?? defaultCinematicRatio
+        let insets = style.insets(width: w, height: h, percentage: frameWidthPercentage, cinematicRatio: cinematicRatio)
         
-        let frameLeftRight = style == .cinematic ? 0.0 : frameThickness
-        let frameTopBottom = frameThickness
-        
-        let totalW = Int(w + frameLeftRight * 2)
-        let totalH = Int(h + frameTopBottom * 2)
+        let totalW = Int(w + insets.left + insets.right)
+        let totalH = Int(h + insets.top + insets.bottom)
         return (totalW, totalH)
     }
     

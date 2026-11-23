@@ -219,6 +219,7 @@ struct MainWorkArea: View {
         hasher.combine(appState.inPhotoWatermarkScale)
         hasher.combine(appState.frameWatermarkScale)
         hasher.combine(appState.defaultFrameStyle)
+        hasher.combine(appState.defaultCinematicRatio)
         hasher.combine(appState.defaultExportQuality)
         hasher.combine(appState.customInPhotoLightURL)
         hasher.combine(appState.customInPhotoDarkURL)
@@ -229,6 +230,7 @@ struct MainWorkArea: View {
             let img = appState.images[idx]
             hasher.combine(img.customWatermarkPosition)
             hasher.combine(img.customFrameStyle)
+            hasher.combine(img.customCinematicRatio)
             hasher.combine(img.customThemeColor)
             hasher.combine(img.customInPhotoWatermarkTheme)
             hasher.combine(img.customFrameWatermarkTheme)
@@ -588,6 +590,33 @@ struct SettingsInspector: View {
                             .pickerStyle(.menu)
                             .frame(maxWidth: 190)
                         }
+                        
+                        let currentPhotoStyle = appState.images[selectedIndex].customFrameStyle ?? appState.defaultFrameStyle
+                        if currentPhotoStyle == .cinematic {
+                            HStack {
+                                Text(L10n.t(.cinematicRatio, lang: appState.currentLanguage))
+                                Spacer()
+                                Picker("", selection: Binding<CinematicAspectRatio?>(
+                                    get: {
+                                        guard selectedIndex < appState.images.count else { return nil }
+                                        return appState.images[selectedIndex].customCinematicRatio
+                                    },
+                                    set: {
+                                        guard selectedIndex < appState.images.count else { return }
+                                        appState.images[selectedIndex].customCinematicRatio = $0
+                                        appState.bumpPreview()
+                                    }
+                                )) {
+                                    Text("\(L10n.t(.useGlobalDefault, lang: appState.currentLanguage)) (\(appState.defaultCinematicRatio.title(for: appState.currentLanguage)))")
+                                        .tag(CinematicAspectRatio?.none)
+                                    ForEach(CinematicAspectRatio.allCases) { ratio in
+                                        Text(ratio.title(for: appState.currentLanguage)).tag(CinematicAspectRatio?.some(ratio))
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: 190)
+                            }
+                        }
                     }
                     .padding(.horizontal, 14)
                     
@@ -755,12 +784,41 @@ struct SettingsInspector: View {
                     .frame(maxWidth: 190)
                 }
                 
+                if appState.defaultFrameStyle == .cinematic {
+                    HStack {
+                        Text(L10n.t(.cinematicRatio, lang: appState.currentLanguage))
+                        Spacer()
+                        Picker("", selection: $appState.defaultCinematicRatio) {
+                            ForEach(CinematicAspectRatio.allCases) { ratio in
+                                Text(ratio.title(for: appState.currentLanguage)).tag(ratio)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 190)
+                    }
+                }
+                
+                let isFixed = appState.defaultFrameStyle.isFixedThickness || (appState.defaultFrameStyle == .cinematic && appState.defaultCinematicRatio != .free)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(L10n.t(.frameWidth, lang: appState.currentLanguage)): \(appState.frameWidthPercentage, specifier: "%.1f")%")
+                    HStack {
+                        Text(L10n.t(.frameWidth, lang: appState.currentLanguage))
+                        Spacer()
+                        if isFixed {
+                            Text(appState.defaultFrameStyle == .cinematic ? L10n.t(.adaptiveRatio, lang: appState.currentLanguage) : L10n.t(.fixedWidth, lang: appState.currentLanguage))
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        } else {
+                            Text(String(format: "%.1f%%", appState.frameWidthPercentage))
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                    }
                     Slider(value: Binding(
                         get: { appState.frameWidthPercentage },
                         set: { appState.frameWidthPercentage = (round($0 * 10.0) / 10.0) }
                     ), in: 0.0...5.0)
+                    .disabled(isFixed)
+                    .opacity(isFixed ? 0.4 : 1.0)
                 }
             }
             .padding(.horizontal, 14)
